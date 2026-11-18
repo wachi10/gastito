@@ -1,4 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Internet: para descargar las imágenes del mapa (OpenStreetMap) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- GPS: ubicación precisa y aproximada del gasto -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Micrófono: para el dictado por voz -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <application
         android:label="gastito"
         android:name="${applicationName}"
@@ -36,10 +45,10 @@
          https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <!-- Permite a la app encontrar el servicio de reconocimiento de voz de Google -->
     <queries>
         <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT"/>
-            <data android:mimeType="text/plain"/>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 </manifest>
