@@ -23,6 +23,15 @@ class Formato {
     return '${fecha.day} ${_mesesCortos[fecha.month - 1]}';
   }
 
+  /// Ejemplo: "17 de noviembre de 2026 · 21:39".
+  static String fechaHora(DateTime fecha) {
+    final mes = _meses[fecha.month - 1].toLowerCase();
+    // padLeft agrega un 0 a la izquierda: 9 → "09".
+    final hora = fecha.hour.toString().padLeft(2, '0');
+    final minutos = fecha.minute.toString().padLeft(2, '0');
+    return '${fecha.day} de $mes de ${fecha.year} · $hora:$minutos';
+  }
+
   /// Ejemplo: 1245.5 → "$1,245.50"   |   -120 → "−$120.00"
   static String dinero(double cantidad) {
     final esNegativo = cantidad < 0;
