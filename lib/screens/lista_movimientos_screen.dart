@@ -5,10 +5,10 @@ import '../models/movimiento.dart';
 import '../models/resumen_mes.dart';
 import '../rutas.dart';
 import '../tema.dart';
-import '../utils/formato.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/balance_mes.dart';
 import '../widgets/movimiento_card.dart';
+import '../widgets/selector_mes.dart';
 
 /// Pantalla principal: movimientos del mes seleccionado.
 ///
@@ -42,12 +42,6 @@ class _ListaMovimientosScreenState extends State<ListaMovimientosScreen> {
   // ---------------- Lógica ----------------
 
   DateTime _inicioDeMes(DateTime fecha) => DateTime(fecha.year, fecha.month, 1);
-
-  bool get _esMesActual {
-    final hoy = DateTime.now();
-    return _mesSeleccionado.year == hoy.year &&
-        _mesSeleccionado.month == hoy.month;
-  }
 
   /// Pide al repositorio los movimientos del mes seleccionado.
   void _cargarMovimientos() {
@@ -111,7 +105,7 @@ class _ListaMovimientosScreenState extends State<ListaMovimientosScreen> {
       drawer: const AppDrawer(rutaActual: Rutas.inicio),
       body: Column(
         children: [
-          _construirSelectorMes(),
+          SelectorMes(mes: _mesSeleccionado, onCambiar: _cambiarMes),
           // Expanded: la lista ocupa todo el espacio que sobra.
           Expanded(child: _construirContenido()),
         ],
@@ -124,41 +118,7 @@ class _ListaMovimientosScreenState extends State<ListaMovimientosScreen> {
     );
   }
 
-  /// ‹ Noviembre 2026 ›
-  Widget _construirSelectorMes() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.chevron_left),
-            tooltip: 'Mes anterior',
-            onPressed: () => _cambiarMes(-1),
-          ),
-          SizedBox(
-            width: 170,
-            child: Text(
-              Formato.mesAnio(_mesSeleccionado),
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: TemaApp.textoPrincipal,
-              ),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            tooltip: 'Mes siguiente',
-            // No hay movimientos en el futuro: si ya estamos en el mes
-            // actual, onPressed es null y Flutter desactiva el botón.
-            onPressed: _esMesActual ? null : () => _cambiarMes(1),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   /// Muestra carga, error, vacío o la lista, según el estado del Future (S18).
   Widget _construirContenido() {
