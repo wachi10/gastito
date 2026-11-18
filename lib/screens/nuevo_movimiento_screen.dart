@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import '../data/movimiento_repository.dart';
 import '../models/categorias.dart';
 import '../models/movimiento.dart';
-import '../services/dictado_parser.dart'; // NUEVO (paso 9)
+import '../services/dictado_parser.dart';
 import '../services/image_service.dart';
-import '../services/voice_service.dart'; // NUEVO (paso 9)
-import '../widgets/boton_dictado.dart'; // NUEVO (paso 9)
+import '../services/location_service.dart'; // NUEVO (paso 10)
+import '../services/voice_service.dart';
+import '../tema.dart'; // NUEVO (paso 10)
+import '../widgets/boton_dictado.dart';
 import '../widgets/selector_ticket.dart';
 
 /// Formulario para registrar un ingreso o un egreso.
@@ -23,7 +25,8 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
 
   final MovimientoRepository _repositorio = MovimientoRepository();
   final ImageService _imageService = ImageService();
-  final VoiceService _voiceService = VoiceService(); // NUEVO (paso 9)
+  final VoiceService _voiceService = VoiceService();
+  final LocationService _locationService = LocationService(); // NUEVO (paso 10)
 
   // Controladores y FocusNode: se crean en initState y se liberan en dispose
   // para evitar fugas de memoria (la "Regla de Oro" de S10).
@@ -40,11 +43,13 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
   bool _procesandoImagen = false; // Muestra el indicador mientras se copia.
   bool _guardado = false; // Para saber si al salir hay que borrar la foto.
 
-  // NUEVO (paso 9): dictado
+  // Dictado (paso 9)
   bool _escuchando = false;
   String _textoDictado = '';
 
-  // PASO 10: aquí irá si el usuario quiere guardar la ubicación.
+  // NUEVO (paso 10): ubicación
+  bool _guardarUbicacion = false; // Estado de la casilla.
+  bool _obteniendoUbicacion = false; // Para el texto del botón Guardar.
 
   @override
   void initState() {
@@ -63,7 +68,7 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
       _imageService.eliminarImagen(_rutaImagen);
     }
 
-    _voiceService.cancelar(); // NUEVO (paso 9): apagar el micrófono al salir.
+    _voiceService.cancelar(); // Apagar el micrófono al salir.
 
     _montoController.dispose();
     _descripcionController.dispose();
@@ -103,7 +108,8 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
     return null;
   }
 
-  // Foto del ticket (paso 8)
+  // ----- Foto del ticket (paso 8) -----
+
   Future<void> _seleccionarImagen({required bool desdeCamara}) async {
     setState(() => _procesandoImagen = true);
 
@@ -137,7 +143,8 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
     _imageService.eliminarImagen(rutaAnterior);
   }
 
-  // NUEVO (paso 9): encender o apagar el micrófono
+  // ----- Dictado (paso 9) -----
+
   Future<void> _alternarDictado() async {
     // Si ya está escuchando, el toque significa "terminé de hablar".
     if (_escuchando) {
@@ -183,7 +190,7 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
     }
   }
 
-  // NUEVO (paso 9): llenar el formulario con lo que se entendió
+  /// Llena el formulario con lo que se entendió del dictado.
   void _aplicarDictado(String frase) {
     if (frase.trim().isEmpty) return;
 
@@ -208,12 +215,57 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
         : 'Listo. Revisa los datos antes de guardar.');
   }
 
+  // ----- NUEVO (paso 10): Ubicación -----
+
+  /// Al marcar la casilla, revisamos GPS y permiso EN ESE MOMENTO,
+  /// para que el usuario sepa de inmediato si se podrá guardar el lugar.
+  Future<void> _cambiarGuardarUbicacion(bool? marcada) async {
+    if (marcada != true) {
+      setState(() => _guardarUbicacion = false);
+      return;
+    }
+
+    setState(() => _guardarUbicacion = true);
+
+    try {
+      await _locationService.verificarPermiso();
+    } on UbicacionException catch (e) {
+      // Si no se puede, desmarcamos la casilla y explicamos por qué.
+      if (!mounted) return;
+      setState(() => _guardarUbicacion = false);
+      _mostrarErrorUbicacion(e);
+    }
+  }
+
+  /// Muestra el error de ubicación con un botón para ir a Ajustes si aplica.
+  void _mostrarErrorUbicacion(UbicacionException e, {String extra = ''}) {
+    SnackBarAction? accion;
+    if (e.gpsApagado) {
+      accion = SnackBarAction(
+        label: 'Encender',
+        onPressed: _locationService.abrirAjustesUbicacion,
+      );
+    } else if (e.permisoBloqueado) {
+      accion = SnackBarAction(
+        label: 'Ajustes',
+        onPressed: _locationService.abrirAjustesApp,
+      );
+    }
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${e.mensaje}$extra'), action: accion),
+    );
+  }
+
   void _mostrarMensaje(String texto) {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(texto)),
     );
   }
+
+  // ----- Guardar -----
 
   Future<void> _guardar() async {
     // 1. Validar todos los campos. Si alguno falla, se marca en rojo y no seguimos.
@@ -222,7 +274,29 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
     FocusScope.of(context).unfocus(); // Oculta el teclado.
     setState(() => _guardando = true);
 
-    // 2. Armar el objeto con los datos del formulario.
+    // 2. NUEVO (paso 10): obtener la ubicación si el usuario la pidió.
+    //    Si falla, seguimos y guardamos sin ubicación.
+    double? latitud;
+    double? longitud;
+
+    if (_guardarUbicacion) {
+      setState(() => _obteniendoUbicacion = true);
+      try {
+        final coordenadas = await _locationService.obtenerUbicacion();
+        latitud = coordenadas.latitud;
+        longitud = coordenadas.longitud;
+        debugPrint('Ubicación obtenida: $latitud, $longitud');
+      } on UbicacionException catch (e) {
+        if (mounted) {
+          _mostrarErrorUbicacion(e, extra: ' Se guardó sin ubicación.');
+        }
+      } finally {
+        if (mounted) setState(() => _obteniendoUbicacion = false);
+      }
+      if (!mounted) return;
+    }
+
+    // 3. Armar el objeto con los datos del formulario.
     final movimiento = Movimiento(
       tipo: _tipo,
       monto: _leerMonto(_montoController.text)!,
@@ -230,10 +304,11 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
       descripcion: _descripcionController.text.trim(),
       fecha: DateTime.now(), // La fecha es siempre la del registro.
       rutaImagen: _rutaImagen,
-      // PASO 10: latitud y longitud
+      latitud: latitud, // NUEVO (paso 10)
+      longitud: longitud, // NUEVO (paso 10)
     );
 
-    // 3. Guardar con manejo de errores.
+    // 4. Guardar con manejo de errores.
     try {
       await _repositorio.insertar(movimiento);
       _guardado = true; // La foto ya pertenece a un movimiento.
@@ -262,7 +337,7 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            // --- NUEVO (paso 9): Dictado (va primero: es la forma más rápida) ---
+            // --- Dictado (va primero: es la forma más rápida) ---
             BotonDictado(
               escuchando: _escuchando,
               textoReconocido: _textoDictado,
@@ -363,8 +438,26 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
               onGaleria: () => _seleccionarImagen(desdeCamara: false),
               onQuitar: _quitarImagen,
             ),
+            const SizedBox(height: 16),
 
-            // PASO 10: aquí irá la casilla "Guardar ubicación del gasto".
+            // --- NUEVO (paso 10): Ubicación (S11: Checkbox) ---
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: TemaApp.borde),
+              ),
+              child: CheckboxListTile(
+                value: _guardarUbicacion,
+                onChanged: ocupado ? null : _cambiarGuardarUbicacion,
+                secondary: const Icon(Icons.location_on_outlined),
+                title: const Text('Guardar ubicación'),
+                subtitle: const Text('Registra dónde hiciste este movimiento'),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+            ),
 
             const SizedBox(height: 24),
 
@@ -373,10 +466,19 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
               // null desactiva el botón mientras algo está en proceso.
               onPressed: ocupado ? null : _guardar,
               child: _guardando
-                  ? const SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                  ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(_obteniendoUbicacion
+                      ? 'Obteniendo ubicación…'
+                      : 'Guardando…'),
+                ],
               )
                   : const Text('Guardar'),
             ),
