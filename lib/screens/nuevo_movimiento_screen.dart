@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../data/movimiento_repository.dart';
 import '../models/categorias.dart';
 import '../models/movimiento.dart';
+import '../services/image_service.dart'; // NUEVO (paso 8)
+import '../widgets/selector_ticket.dart'; // NUEVO (paso 8)
 
 /// Formulario para registrar un ingreso o un egreso.
 class NuevoMovimientoScreen extends StatefulWidget {
@@ -17,6 +19,7 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
   final _formKey = GlobalKey<FormState>();
 
   final MovimientoRepository _repositorio = MovimientoRepository();
+  final ImageService _imageService = ImageService(); // NUEVO (paso 8)
 
   // Controladores y FocusNode: se crean en initState y se liberan en dispose
   // para evitar fugas de memoria (la "Regla de Oro" de S10).
@@ -28,7 +31,11 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
   late String _categoria;
   bool _guardando = false; // Evita guardar dos veces si tocan rápido el botón.
 
-  // PASO 8: aquí irá la ruta de la foto del ticket.
+  // NUEVO (paso 8): foto del ticket
+  String? _rutaImagen; // Ruta permanente de la foto, o null si no hay.
+  bool _procesandoImagen = false; // Muestra el indicador mientras se copia.
+  bool _guardado = false; // Para saber si al salir hay que borrar la foto.
+
   // PASO 10: aquí irá si el usuario quiere guardar la ubicación.
 
   @override
@@ -42,6 +49,12 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
 
   @override
   void dispose() {
+    // NUEVO (paso 8): si el usuario tomó una foto pero salió sin guardar,
+    // la borramos para no dejar archivos huérfanos ocupando espacio (S24).
+    if (!_guardado && _rutaImagen != null) {
+      _imageService.eliminarImagen(_rutaImagen);
+    }
+
     _montoController.dispose();
     _descripcionController.dispose();
     _descripcionFocus.dispose();
@@ -80,6 +93,47 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
     return null;
   }
 
+  // NUEVO (paso 8): abrir cámara o galería
+  Future<void> _seleccionarImagen({required bool desdeCamara}) async {
+    setState(() => _procesandoImagen = true);
+
+    try {
+      final ruta = desdeCamara
+          ? await _imageService.tomarFoto()
+          : await _imageService.elegirDeGaleria();
+
+      // Si la pantalla se cerró mientras tanto, borramos la foto y salimos.
+      if (!mounted) {
+        _imageService.eliminarImagen(ruta);
+        return;
+      }
+
+      // ruta es null si el usuario canceló: simplemente no cambia nada.
+      if (ruta != null) {
+        setState(() => _rutaImagen = ruta);
+      }
+    } on ImagenException catch (e) {
+      // Permiso negado u otro error: avisamos sin cerrar la app.
+      if (mounted) _mostrarMensaje(e.mensaje);
+    } finally {
+      // "finally" se ejecuta siempre: haya salido bien, mal o cancelado.
+      if (mounted) setState(() => _procesandoImagen = false);
+    }
+  }
+
+  // NUEVO (paso 8): quitar la foto elegida
+  void _quitarImagen() {
+    final rutaAnterior = _rutaImagen;
+    setState(() => _rutaImagen = null);
+    _imageService.eliminarImagen(rutaAnterior);
+  }
+
+  void _mostrarMensaje(String texto) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(texto)),
+    );
+  }
+
   Future<void> _guardar() async {
     // 1. Validar todos los campos. Si alguno falla, se marca en rojo y no seguimos.
     if (!_formKey.currentState!.validate()) return;
@@ -94,22 +148,21 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
       categoria: _categoria,
       descripcion: _descripcionController.text.trim(),
       fecha: DateTime.now(), // La fecha es siempre la del registro.
-      // PASO 8: rutaImagen
+      rutaImagen: _rutaImagen, // NUEVO (paso 8)
       // PASO 10: latitud y longitud
     );
 
     // 3. Guardar con manejo de errores.
     try {
       await _repositorio.insertar(movimiento);
+      _guardado = true; // NUEVO (paso 8): la foto ya pertenece a un movimiento.
       if (!mounted) return;
       // Regresamos a la lista avisando que sí se guardó (true).
       Navigator.pop(context, true);
     } on DatosException catch (e) {
       if (!mounted) return;
       setState(() => _guardando = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.mensaje)),
-      );
+      _mostrarMensaje(e.mensaje);
     }
   }
 
@@ -151,8 +204,18 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 8),
 
-            // PASO 8: aquí irá el recuadro "Agregar ticket" (cámara / galería).
+            // --- NUEVO (paso 8): Ticket ---
+            _etiqueta('Ticket'),
+            SelectorTicket(
+              rutaImagen: _rutaImagen,
+              cargando: _procesandoImagen,
+              onCamara: () => _seleccionarImagen(desdeCamara: true),
+              onGaleria: () => _seleccionarImagen(desdeCamara: false),
+              onQuitar: _quitarImagen,
+            ),
+
             // PASO 9: aquí irá el botón del micrófono.
 
             const SizedBox(height: 16),
@@ -220,8 +283,8 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
 
             // --- Guardar ---
             ElevatedButton(
-              // null desactiva el botón mientras se guarda.
-              onPressed: _guardando ? null : _guardar,
+              // null desactiva el botón mientras se guarda o se procesa la foto.
+              onPressed: (_guardando || _procesandoImagen) ? null : _guardar,
               child: _guardando
                   ? const SizedBox(
                 width: 22,
