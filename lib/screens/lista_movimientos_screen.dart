@@ -100,40 +100,6 @@ class _ListaMovimientosScreenState extends State<ListaMovimientosScreen> {
     }
   }
 
-  // ----- TEMPORAL: datos de prueba (se borra cuando el formulario funcione) -----
-  Future<void> _insertarDatosDePrueba() async {
-    final hoy = DateTime.now();
-    final mesPasado = DateTime(hoy.year, hoy.month - 1, 15);
-
-    await _repositorio.insertar(Movimiento(
-      tipo: Movimiento.tipoIngreso,
-      monto: 4000,
-      categoria: 'Beca',
-      descripcion: 'Beca del mes',
-      fecha: hoy,
-    ));
-    await _repositorio.insertar(Movimiento(
-      tipo: Movimiento.tipoEgreso,
-      monto: 35,
-      categoria: 'Transporte',
-      descripcion: 'Uber a la escuela',
-      fecha: hoy,
-    ));
-    await _repositorio.insertar(Movimiento(
-      tipo: Movimiento.tipoEgreso,
-      monto: 1250.5,
-      categoria: 'Comida',
-      descripcion: 'Despensa del mes pasado',
-      fecha: mesPasado,
-    ));
-
-    if (!mounted) return;
-    setState(() {
-      _cargarMovimientos();
-    });
-  }
-  // ----- FIN TEMPORAL -----
-
   // ---------------- Interfaz ----------------
 
   @override
@@ -141,14 +107,6 @@ class _ListaMovimientosScreenState extends State<ListaMovimientosScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Gastito'),
-        actions: [
-          // TEMPORAL: botón para insertar datos de prueba.
-          IconButton(
-            icon: const Icon(Icons.science_outlined),
-            tooltip: 'Datos de prueba',
-            onPressed: _insertarDatosDePrueba,
-          ),
-        ],
       ),
       drawer: const AppDrawer(rutaActual: Rutas.inicio),
       body: Column(
