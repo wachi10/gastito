@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import '../data/movimiento_repository.dart';
 import '../models/categorias.dart';
 import '../models/movimiento.dart';
-import '../services/image_service.dart'; // NUEVO (paso 8)
-import '../widgets/selector_ticket.dart'; // NUEVO (paso 8)
+import '../services/dictado_parser.dart'; // NUEVO (paso 9)
+import '../services/image_service.dart';
+import '../services/voice_service.dart'; // NUEVO (paso 9)
+import '../widgets/boton_dictado.dart'; // NUEVO (paso 9)
+import '../widgets/selector_ticket.dart';
 
 /// Formulario para registrar un ingreso o un egreso.
 class NuevoMovimientoScreen extends StatefulWidget {
@@ -19,7 +22,8 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
   final _formKey = GlobalKey<FormState>();
 
   final MovimientoRepository _repositorio = MovimientoRepository();
-  final ImageService _imageService = ImageService(); // NUEVO (paso 8)
+  final ImageService _imageService = ImageService();
+  final VoiceService _voiceService = VoiceService(); // NUEVO (paso 9)
 
   // Controladores y FocusNode: se crean en initState y se liberan en dispose
   // para evitar fugas de memoria (la "Regla de Oro" de S10).
@@ -31,10 +35,14 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
   late String _categoria;
   bool _guardando = false; // Evita guardar dos veces si tocan rápido el botón.
 
-  // NUEVO (paso 8): foto del ticket
+  // Foto del ticket (paso 8)
   String? _rutaImagen; // Ruta permanente de la foto, o null si no hay.
   bool _procesandoImagen = false; // Muestra el indicador mientras se copia.
   bool _guardado = false; // Para saber si al salir hay que borrar la foto.
+
+  // NUEVO (paso 9): dictado
+  bool _escuchando = false;
+  String _textoDictado = '';
 
   // PASO 10: aquí irá si el usuario quiere guardar la ubicación.
 
@@ -49,11 +57,13 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
 
   @override
   void dispose() {
-    // NUEVO (paso 8): si el usuario tomó una foto pero salió sin guardar,
+    // Si el usuario tomó una foto pero salió sin guardar,
     // la borramos para no dejar archivos huérfanos ocupando espacio (S24).
     if (!_guardado && _rutaImagen != null) {
       _imageService.eliminarImagen(_rutaImagen);
     }
+
+    _voiceService.cancelar(); // NUEVO (paso 9): apagar el micrófono al salir.
 
     _montoController.dispose();
     _descripcionController.dispose();
@@ -93,7 +103,7 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
     return null;
   }
 
-  // NUEVO (paso 8): abrir cámara o galería
+  // Foto del ticket (paso 8)
   Future<void> _seleccionarImagen({required bool desdeCamara}) async {
     setState(() => _procesandoImagen = true);
 
@@ -121,14 +131,85 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
     }
   }
 
-  // NUEVO (paso 8): quitar la foto elegida
   void _quitarImagen() {
     final rutaAnterior = _rutaImagen;
     setState(() => _rutaImagen = null);
     _imageService.eliminarImagen(rutaAnterior);
   }
 
+  // NUEVO (paso 9): encender o apagar el micrófono
+  Future<void> _alternarDictado() async {
+    // Si ya está escuchando, el toque significa "terminé de hablar".
+    if (_escuchando) {
+      await _voiceService.detener();
+      // No esperamos el aviso del teléfono (a veces no llega):
+      // apagamos el estado nosotros mismos.
+      if (mounted) setState(() => _escuchando = false);
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _escuchando = true;
+      _textoDictado = '';
+    });
+
+    try {
+      await _voiceService.escuchar(
+        onResultado: (texto, esFinal) {
+          if (!mounted) return;
+          setState(() {
+            _textoDictado = texto;
+            // Si es el resultado final, el dictado terminó:
+            // apagamos el estado aunque el teléfono no avise.
+            if (esFinal) _escuchando = false;
+          });
+          if (esFinal) _aplicarDictado(texto);
+        },
+        onTerminado: () {
+          if (mounted) setState(() => _escuchando = false);
+        },
+        onError: (mensaje) {
+          if (!mounted) return;
+          setState(() => _escuchando = false);
+          _mostrarMensaje(mensaje);
+        },
+      );
+    } on VozException catch (e) {
+      // Sin permiso o sin reconocedor de voz: avisamos sin cerrar la app.
+      if (!mounted) return;
+      setState(() => _escuchando = false);
+      _mostrarMensaje(e.mensaje);
+    }
+  }
+
+  // NUEVO (paso 9): llenar el formulario con lo que se entendió
+  void _aplicarDictado(String frase) {
+    if (frase.trim().isEmpty) return;
+
+    final resultado = DictadoParser.analizar(frase);
+
+    setState(() {
+      _tipo = resultado.tipo;
+      _categoria = resultado.categoria;
+      _descripcionController.text = resultado.descripcion;
+
+      final monto = resultado.monto;
+      if (monto != null) {
+        // 35.0 → "35"   |   35.5 → "35.50"
+        _montoController.text = monto == monto.roundToDouble()
+            ? monto.toStringAsFixed(0)
+            : monto.toStringAsFixed(2);
+      }
+    });
+
+    _mostrarMensaje(resultado.monto == null
+        ? 'No escuché el monto. Escríbelo a mano.'
+        : 'Listo. Revisa los datos antes de guardar.');
+  }
+
   void _mostrarMensaje(String texto) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(texto)),
     );
@@ -148,14 +229,14 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
       categoria: _categoria,
       descripcion: _descripcionController.text.trim(),
       fecha: DateTime.now(), // La fecha es siempre la del registro.
-      rutaImagen: _rutaImagen, // NUEVO (paso 8)
+      rutaImagen: _rutaImagen,
       // PASO 10: latitud y longitud
     );
 
     // 3. Guardar con manejo de errores.
     try {
       await _repositorio.insertar(movimiento);
-      _guardado = true; // NUEVO (paso 8): la foto ya pertenece a un movimiento.
+      _guardado = true; // La foto ya pertenece a un movimiento.
       if (!mounted) return;
       // Regresamos a la lista avisando que sí se guardó (true).
       Navigator.pop(context, true);
@@ -171,6 +252,7 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
   @override
   Widget build(BuildContext context) {
     final categorias = Categorias.porTipo(_tipo);
+    final ocupado = _guardando || _procesandoImagen || _escuchando;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Nuevo movimiento')),
@@ -180,6 +262,14 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
+            // --- NUEVO (paso 9): Dictado (va primero: es la forma más rápida) ---
+            BotonDictado(
+              escuchando: _escuchando,
+              textoReconocido: _textoDictado,
+              onPressed: _alternarDictado,
+            ),
+            const SizedBox(height: 16),
+
             // --- Tipo: Ingreso o Egreso (S11: exclusión mutua con RadioGroup) ---
             _etiqueta('Tipo'),
             RadioGroup<String>(
@@ -206,20 +296,6 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
             ),
             const SizedBox(height: 8),
 
-            // --- NUEVO (paso 8): Ticket ---
-            _etiqueta('Ticket'),
-            SelectorTicket(
-              rutaImagen: _rutaImagen,
-              cargando: _procesandoImagen,
-              onCamara: () => _seleccionarImagen(desdeCamara: true),
-              onGaleria: () => _seleccionarImagen(desdeCamara: false),
-              onQuitar: _quitarImagen,
-            ),
-
-            // PASO 9: aquí irá el botón del micrófono.
-
-            const SizedBox(height: 16),
-
             // --- Monto ---
             _etiqueta('Monto'),
             TextFormField(
@@ -240,9 +316,9 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
             // --- Categoría (S11: DropdownButton) ---
             _etiqueta('Categoría'),
             DropdownButtonFormField<String>(
-              // La key cambia con el tipo: así Flutter reconstruye el campo
-              // con la nueva lista de categorías y su nuevo valor inicial.
-              key: ValueKey(_tipo),
+              // La key cambia cuando cambia el tipo o la categoría (por ejemplo,
+              // al dictar). Así Flutter reconstruye el campo con el valor correcto.
+              key: ValueKey('$_tipo|$_categoria'),
               initialValue: _categoria,
               items: categorias.map((categoria) {
                 return DropdownMenuItem<String>(
@@ -276,6 +352,17 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
                 hintText: 'Ej. Uber a la escuela',
               ),
             ),
+            const SizedBox(height: 8),
+
+            // --- Ticket (paso 8) ---
+            _etiqueta('Ticket'),
+            SelectorTicket(
+              rutaImagen: _rutaImagen,
+              cargando: _procesandoImagen,
+              onCamara: () => _seleccionarImagen(desdeCamara: true),
+              onGaleria: () => _seleccionarImagen(desdeCamara: false),
+              onQuitar: _quitarImagen,
+            ),
 
             // PASO 10: aquí irá la casilla "Guardar ubicación del gasto".
 
@@ -283,8 +370,8 @@ class _NuevoMovimientoScreenState extends State<NuevoMovimientoScreen> {
 
             // --- Guardar ---
             ElevatedButton(
-              // null desactiva el botón mientras se guarda o se procesa la foto.
-              onPressed: (_guardando || _procesandoImagen) ? null : _guardar,
+              // null desactiva el botón mientras algo está en proceso.
+              onPressed: ocupado ? null : _guardar,
               child: _guardando
                   ? const SizedBox(
                 width: 22,
